@@ -1,0 +1,12 @@
+{
+  "name": "snap-cli",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "CLI clipboard history tool",
+  "bin": {
+    "snap": "./cli.js"
+  },
+  "dependencies": {
+    "clipboardy": "^4.0.0"
+  }
+}
