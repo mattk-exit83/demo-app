@@ -1,7 +1,8 @@
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, stat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { createInterface } from 'node:readline';
 import clipboard from 'clipboardy';
 
 const SNAP_DIR = join(homedir(), '.snap');
@@ -27,7 +28,7 @@ async function writeHistory(entries) {
   await writeFile(HISTORY_FILE, JSON.stringify(entries, null, 2));
 }
 
-export async function save() {
+export async function save(tags) {
   const content = await clipboard.read();
   if (!content.trim()) {
     console.error('Clipboard is empty. Nothing to save.');
@@ -38,11 +39,16 @@ export async function save() {
   const history = await readHistory();
   const nextId = history.length > 0 ? Math.max(...history.map(e => e.id)) + 1 : 1;
 
-  history.push({
+  const entry = {
     id: nextId,
     content,
     timestamp: new Date().toISOString(),
-  });
+  };
+  if (tags && tags.length > 0) {
+    entry.tags = tags;
+  }
+
+  history.push(entry);
 
   // Enforce cap — drop oldest entries
   while (history.length > MAX_ENTRIES) {
@@ -51,21 +57,31 @@ export async function save() {
 
   await writeHistory(history);
   const preview = content.length > 80 ? content.slice(0, 80) + '...' : content;
-  console.log(`Saved #${nextId}: ${preview}`);
+  const tagStr = entry.tags ? ` [${entry.tags.join(', ')}]` : '';
+  console.log(`Saved #${nextId}: ${preview}${tagStr}`);
 }
 
-export async function list() {
+export async function list(tag) {
   const history = await readHistory();
-  if (history.length === 0) {
+  let entries = history;
+
+  if (tag) {
+    entries = entries.filter(e => e.tags && e.tags.includes(tag));
+    if (entries.length === 0) {
+      console.log(`No entries found with tag "${tag}".`);
+      return;
+    }
+  } else if (entries.length === 0) {
     console.log('No entries saved. Use `snap` to save clipboard contents.');
     return;
   }
 
-  const reversed = [...history].reverse();
+  const reversed = [...entries].reverse();
   for (const entry of reversed) {
     const preview = entry.content.length > 80 ? entry.content.slice(0, 80) + '...' : entry.content;
     const ago = timeAgo(new Date(entry.timestamp));
-    console.log(`  #${entry.id}  ${preview}  (${ago})`);
+    const tagStr = entry.tags ? ` [${entry.tags.join(', ')}]` : '';
+    console.log(`  #${entry.id}  ${preview}${tagStr}  (${ago})`);
   }
 }
 
@@ -119,6 +135,51 @@ export async function get(id) {
   await clipboard.write(entry.content);
   const preview = entry.content.length > 80 ? entry.content.slice(0, 80) + '...' : entry.content;
   console.log(`Copied #${numId} to clipboard: ${preview}`);
+}
+
+export async function exportHistory() {
+  const history = await readHistory();
+  console.log(JSON.stringify(history, null, 2));
+}
+
+export async function clear() {
+  const history = await readHistory();
+  if (history.length === 0) {
+    console.log('Nothing to clear.');
+    return;
+  }
+
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  const answer = await new Promise(resolve => {
+    rl.question('Clear all history? (y/N) ', resolve);
+  });
+  rl.close();
+
+  if (answer === 'y' || answer === 'Y') {
+    await writeHistory([]);
+    console.log('History cleared.');
+  } else {
+    console.log('Aborted.');
+  }
+}
+
+export async function stats() {
+  const history = await readHistory();
+  if (history.length === 0) {
+    console.log('No entries saved.');
+    console.log('Entries: 0');
+    return;
+  }
+
+  const count = history.length;
+  const oldest = history[0].timestamp;
+  const newest = history[history.length - 1].timestamp;
+  const fileInfo = await stat(HISTORY_FILE);
+
+  console.log(`Entries: ${count}`);
+  console.log(`Oldest:  ${oldest}`);
+  console.log(`Newest:  ${newest}`);
+  console.log(`Size:    ${fileInfo.size} bytes`);
 }
 
 function timeAgo(date) {
